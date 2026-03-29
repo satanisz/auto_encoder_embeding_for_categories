@@ -344,8 +344,162 @@ def run_pipeline() -> None:
         pickle.dump(model, f)
     print("Final model saved to final_model.pkl")
 
+def get_anomaly_scores(model: TabularVAE, X_cat: torch.Tensor, X_cont: torch.Tensor, criterion_ce=None) -> torch.Tensor:
+    """Helper to identically calculate the anomaly score components."""
+    if criterion_ce is None:
+        criterion_ce = nn.CrossEntropyLoss(reduction='none')
+        
+    model.eval()
+    with torch.no_grad():
+        recon_cont, recon_cat_logits, _, mu, logvar = model(X_cat, X_cont)
+        loss_cont = torch.mean((recon_cont - X_cont)**2, dim=1)
+        
+        loss_cat = torch.zeros(X_cat.size(0))
+        for i in range(len(recon_cat_logits)):
+            loss_cat += criterion_ce(recon_cat_logits[i], X_cat[:, i])
+            
+        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        return loss_cont + loss_cat + kld_loss
 
-def run_model() -> pd.DataFrame:
+def explain_counterfactuals(
+    df_original: pd.DataFrame, 
+    instance_idx: int, 
+    model: TabularVAE, 
+    encoders: dict[str, LabelEncoder], 
+    scaler: StandardScaler, 
+    max_score: float,
+    features_to_vary: list[str] = ['Dzial', 'Poziom']
+) -> None:
+    """Generates and plots counterfactual alternatives for a given instance."""
+    instance_row = df_original.loc[instance_idx]
+    cat_cols = ['Dzial', 'Poziom']
+    num_cols = ['Staz_Lata', 'Wynagrodzenie']
+    
+    criterion_ce = nn.CrossEntropyLoss(reduction='none')
+    
+    for feat in features_to_vary:
+        if feat not in cat_cols:
+            continue
+            
+        original_val = instance_row[feat]
+        valid_options = df_original[feat].unique().tolist()
+        if original_val in valid_options:
+            valid_options.remove(original_val)
+        valid_options = [original_val] + valid_options
+
+        cf_df = pd.DataFrame([instance_row] * len(valid_options))
+        cf_df[feat] = valid_options
+        
+        temp_df = cf_df.copy()
+        for col in cat_cols:
+            temp_df[col] = encoders[col].transform(temp_df[col])
+        temp_df[num_cols] = scaler.transform(temp_df[num_cols])
+        
+        X_cat_cf = torch.tensor(temp_df[cat_cols].values, dtype=torch.long)
+        X_cont_cf = torch.tensor(temp_df[num_cols].values, dtype=torch.float32)
+        
+        cf_scores = get_anomaly_scores(model, X_cat_cf, X_cont_cf, criterion_ce)
+        cf_norm = (cf_scores / max_score).numpy()
+        
+        plt.figure(figsize=(10, 6))
+        colors = ['red' if val == original_val else 'blue' for val in valid_options]
+        bars = plt.bar(valid_options, cf_norm, color=colors, edgecolor='black')
+        
+        original_score = cf_norm[0]
+        plt.axhline(y=original_score, color='red', linestyle='--', alpha=0.5, label='Original Score Level')
+        
+        for i, (val, score) in enumerate(zip(valid_options, cf_norm)):
+            plt.text(i, score + 0.01, f"{score:.3f}", ha='center', va='bottom', 
+                     fontsize=10, color='red' if val == original_val else 'blue', weight='bold')
+            
+        info_str = " | ".join([f"{k}: {v}" if isinstance(v, str) else f"{k}: {v:.2f}" for k, v in instance_row.to_dict().items()])
+        plt.title(f'Counterfactual Analysis for {feat} (Original: {original_val})\nInstance {instance_idx}: {info_str}', fontsize=10)
+        plt.ylabel('Normalized Anomaly Score [Dataset Max = 1.0]')
+        plt.xlabel(feat)
+        plt.legend(loc='upper right')
+        plt.ylim(0, max(cf_norm) * 1.15 if max(cf_norm) > 0 else 1.0)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        filename = f'counterfactual_{feat}_instance_{instance_idx}.png'
+        plt.savefig(filename)
+        print(f"Saved {filename}")
+        plt.close()
+
+def explain_continuous(
+    df_original: pd.DataFrame, 
+    instance_idx: int, 
+    model: TabularVAE, 
+    encoders: dict[str, LabelEncoder], 
+    scaler: StandardScaler, 
+    max_score: float,
+    features_to_vary: list[str] = ['Staz_Lata', 'Wynagrodzenie']
+) -> None:
+    """Generates and plots continuous counterfactual alternatives (partial dependence) for a given instance."""
+    instance_row = df_original.loc[instance_idx]
+    cat_cols = ['Dzial', 'Poziom']
+    num_cols = ['Staz_Lata', 'Wynagrodzenie']
+    
+    criterion_ce = nn.CrossEntropyLoss(reduction='none')
+    
+    for feat in features_to_vary:
+        if feat not in num_cols:
+            continue
+            
+        min_val = df_original[feat].min()
+        max_val = df_original[feat].max()
+        valid_options = np.linspace(min_val, max_val, 100)
+        
+        cf_df = pd.DataFrame([instance_row] * len(valid_options))
+        cf_df[feat] = valid_options
+        
+        temp_df = cf_df.copy()
+        for col in cat_cols:
+            temp_df[col] = encoders[col].transform(temp_df[col])
+        temp_df[num_cols] = scaler.transform(temp_df[num_cols])
+        
+        X_cat_cf = torch.tensor(temp_df[cat_cols].values, dtype=torch.long)
+        X_cont_cf = torch.tensor(temp_df[num_cols].values, dtype=torch.float32)
+        
+        cf_scores = get_anomaly_scores(model, X_cat_cf, X_cont_cf, criterion_ce)
+        cf_norm = (cf_scores / max_score).numpy()
+        
+        original_val = instance_row[feat]
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(valid_options, cf_norm, color='blue', linewidth=2, label='Counterfactual Trajectory')
+        
+        temp_orig = pd.DataFrame([instance_row])
+        for col in cat_cols:
+            temp_orig[col] = encoders[col].transform(temp_orig[col])
+        temp_orig[num_cols] = scaler.transform(temp_orig[num_cols])
+        
+        X_cat_orig = torch.tensor(temp_orig[cat_cols].values, dtype=torch.long)
+        X_cont_orig = torch.tensor(temp_orig[num_cols].values, dtype=torch.float32)
+        
+        orig_score = get_anomaly_scores(model, X_cat_orig, X_cont_orig, criterion_ce)
+        orig_norm = (orig_score / max_score).numpy()[0]
+        
+        plt.scatter([original_val], [orig_norm], color='red', s=100, zorder=5, label='Original Value')
+        plt.axvline(x=original_val, color='red', linestyle='--', alpha=0.5)
+        plt.axhline(y=orig_norm, color='red', linestyle='--', alpha=0.5)
+        
+        info_str = " | ".join([f"{k}: {v}" if isinstance(v, str) else f"{k}: {v:.2f}" for k, v in instance_row.to_dict().items()])
+        plt.title(f'Continuous Counterfactual Analysis for {feat} (Original: {original_val:.2f})\nInstance {instance_idx}: {info_str}', fontsize=10)
+        plt.ylabel('Normalized Anomaly Score [Dataset Max = 1.0]')
+        plt.xlabel(feat)
+        plt.legend(loc='upper right')
+        
+        y_max = max(max(cf_norm), orig_norm)
+        plt.ylim(0, y_max * 1.15 if y_max > 0 else 1.0)
+        
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        filename = f'counterfactual_continuous_{feat}_instance_{instance_idx}.png'
+        plt.savefig(filename)
+        print(f"Saved {filename}")
+        plt.close()
+
+def run_model(n_anomalies_to_explain: int = 1) -> pd.DataFrame:
     """Runs the model to evaluate anomalies and returns a dataframe with the top 10 anomalies."""
     with open("final_model.pkl", "rb") as f:
         model: TabularVAE = pickle.load(f)
@@ -354,25 +508,18 @@ def run_model() -> pd.DataFrame:
     df = generator.generate(n_samples=2000)
     
     df_prepared = df.copy()
-    _, _, _, _, _, X_cat, X_cont = prepare_data(df_prepared)
+    loader, emb_dims, n_cont, encoders, scaler, X_cat, X_cont = prepare_data(df_prepared)
+    
+    criterion_ce = nn.CrossEntropyLoss(reduction='none')
+    anomaly_scores = get_anomaly_scores(model, X_cat, X_cont, criterion_ce)
+    max_score = anomaly_scores.max().item()
+    norm_scores = anomaly_scores / max_score
     
     model.eval()
-    criterion_ce = nn.CrossEntropyLoss(reduction='none')
-    
     with torch.no_grad():
-        recon_cont, recon_cat_logits, _, mu, logvar = model(X_cat, X_cont)
+        _, _, _, mu, _ = model(X_cat, X_cont)
         
-        loss_cont = torch.mean((recon_cont - X_cont)**2, dim=1)
-        
-        loss_cat = torch.zeros(X_cat.size(0))
-        for i in range(len(recon_cat_logits)):
-            loss_cat += criterion_ce(recon_cat_logits[i], X_cat[:, i])
-            
-        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-        
-        anomaly_scores = loss_cont + loss_cat + kld_loss
-        
-    df['anomaly_score'] = anomaly_scores.numpy()
+    df['anomaly_score'] = norm_scores.numpy()
     df['Latent_X'] = mu[:, 0].numpy()
     df['Latent_Y'] = mu[:, 1].numpy()
     
@@ -397,6 +544,11 @@ def run_model() -> pd.DataFrame:
     plt.savefig('anomalies_latent_space.png')
     print("Saved anomalies_latent_space.png")
     
+    print(f"\nExplaining top {n_anomalies_to_explain} anomalies with counterfactuals...")
+    for idx in top_10_anomalies.head(n_anomalies_to_explain).index:
+        explain_counterfactuals(df, idx, model, encoders, scaler, max_score, features_to_vary=['Dzial', 'Poziom'])
+        explain_continuous(df, idx, model, encoders, scaler, max_score, features_to_vary=['Staz_Lata', 'Wynagrodzenie'])
+        
     return top_10_anomalies
 
 if __name__ == "__main__":
@@ -404,4 +556,4 @@ if __name__ == "__main__":
     if run:
         run_pipeline()
     else:
-        run_model()
+        run_model(n_anomalies_to_explain=3)
