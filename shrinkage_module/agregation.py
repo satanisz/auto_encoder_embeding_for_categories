@@ -34,6 +34,12 @@ def create_surrounding_agg(data: pd.DataFrame, group_cols: list[str], aggregatio
     agg = data.groupby(group_cols, as_index=False).agg(**aggregations)
     return data.merge(agg, on=group_cols, how="left")
 
+def create_time_surrounding_agg(data: pd.DataFrame, aggregations: dict[str, tuple[str, str]]) -> pd.DataFrame:
+    """Computes specified aggregations grouped by specified columns and merges them back to the original DataFrame."""
+    group_cols = ["con"]
+    agg = data.groupby(group_cols, as_index=False).agg(**aggregations)
+    return data.merge(agg, on=group_cols, how="left")
+
 def perform_aggregation(data: pd.DataFrame) -> pd.DataFrame:
     """Applies predefined sum aggregations over the dataset, casting the target metric to float."""
     target_value = "balance in functional currency"    
@@ -98,19 +104,21 @@ def perform_shrinkage_simple(
     data: pd.DataFrame, 
     columns_to_aggregate: list[str], 
     agg_type_list: list[str] = ["mean", "count", "std"],
-    target_value: str = "balance_in_functional_currency",
-    intervals: int = 5
+    target_value: str = "balance_in_functional_currency"
 ) -> pd.DataFrame:
     """Calculates smoothed (shrunk) target measurements per designated columns using a population-weighted average."""
     
     df = data.astype({target_value: "float64"}).copy()
-
+    
     # 1. Create Surrounding
     for col in columns_to_aggregate:
         group_cols = [col, "fdpp_partition_date"]
         aggregations = {f"{col}_{k}": (target_value, k) for k in agg_type_list}
         df = create_surrounding_agg(df, group_cols, aggregations)
-
+    
+    aggregations = {f"time_{k}": (target_value, k) for k in agg_type_list}
+    df = create_time_surrounding_agg(df, aggregations)
+    columns_to_aggregate = columns_to_aggregate + ["time"]
     # 2. Process Shrinkage
     for col in columns_to_aggregate:
         std_col, count_col, mean_col = f"{col}_std", f"{col}_count", f"{col}_mean"
@@ -130,23 +138,6 @@ def perform_shrinkage_simple(
         # df[f"{col}_mu_2"] = ((df[mean_col] * df[count_col] - df[target_value]) / (df[count_col] - 1)).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
         # df[f"{col}_mu_3"] = (df[mean_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
 
-        # df_m = equalish_intervals_1_to_n(df[count_col], intervals=intervals, col_prefix=f"{col}_m")
-        
-        # m = df_m
-        # count = df[count_col]
-        # mean = df[mean_col]
-        # y = df[target_value]
-        
-        # den = m.add(count, axis=0)
-        # w_df = den.rdiv(count, axis=0)
-        # w_df.columns = [f"{col}_w{i}" for i in range(1, len(w_df.columns) + 1)]
-        
-        # mu_df = w_df.mul(y, axis=0).add((1 - w_df).mul(mean, axis=0)).abs()
-        # mu_df.columns = [f"{col}_mu_{i}" for i in range(1, len(mu_df.columns) + 1)]
-        
-        # df = pd.concat([df, df_m, w_df, mu_df], axis=1)
-
-    # 3. Compile Final Columns
     columns_to_process = ["fdpp_partition_date", "con"] + [
         f"{col}_mu_{idx}" 
         for col in columns_to_aggregate 

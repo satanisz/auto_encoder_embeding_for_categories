@@ -50,8 +50,8 @@ def example_perform_shrinkage() -> None:
     
     # Create sample DataFrame
     data = pd.DataFrame({
-        "fdpp_partition_date": ["2026-01-01"] * 10,
-        "con": range(10, 20),
+        "fdpp_partition_date": ["2026-01-01"] * 8 + ["2026-02-01"] + ["2026-03-01"],
+        "con": list(range(10, 18)) + [10, 10],
         "category_A": ["cat1", "cat1", "cat1", "cat2", "cat2", "cat2", "cat2", "cat3", "cat3", "cat3"],
         "category_B": ["typeX", "typeY", "typeX", "typeY", "typeX", "typeX", "typeY", "typeY", "typeX", "typeX"],
         "balance_in_functional_currency": [100.0, 150.0, 120.0, 50.0, 60.0, 55.0, 45.0, 200.0, 210.0, 190.0]
@@ -68,12 +68,12 @@ def example_perform_shrinkage() -> None:
         columns_to_aggregate=columns_to_aggregate,
         agg_type_list=["mean", "count", "std"],
         target_value="balance_in_functional_currency",
-        intervals=5
+
     )
     
     print("\nResulting Shrinkage Dataframe (showing subset of columns to avoid clutter):")
     cols_to_show = ["fdpp_partition_date", "con", "category_A_mu_0", "category_A_mu_1", "category_A_mu_2"]
-    print(result_df[cols_to_show])
+    print(result_df)
 
 if __name__ == "__main__":
     example_safe_div()
