@@ -104,7 +104,8 @@ def perform_shrinkage_simple(
     data: pd.DataFrame, 
     columns_to_aggregate: list[str], 
     agg_type_list: list[str] = ["mean", "count", "std"],
-    target_value: str = "balance_in_functional_currency"
+    target_value: str = "balance_in_functional_currency",
+    intervals: int = 7
 ) -> pd.DataFrame:
     """Calculates smoothed (shrunk) target measurements per designated columns using a population-weighted average."""
     
@@ -122,15 +123,14 @@ def perform_shrinkage_simple(
     # 2. Process Shrinkage
     for col in columns_to_aggregate:
         std_col, count_col, mean_col = f"{col}_std", f"{col}_count", f"{col}_mean"
-        
-        # df[f"{col}_mu_0"] = (df[target_value] / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
-        # df[f"{col}_mu_1"] = ((df[target_value] + df[mean_col]) / (2 * df[std_col])).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
-        # df[f"{col}_mu_2"] = (((df[mean_col] * df[count_col] - df[target_value]) / (df[count_col] - 1)) / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
-        # df[f"{col}_mu_3"] = (df[mean_col] / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
 
-        df[f"{col}_mu_0"] = ((df[target_value]-df[mean_col]) / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
-        df[f"{col}_mu_1"] = ((((df[target_value] + df[mean_col]) / 2) - df[mean_col]) / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
-        df[f"{col}_mu_2"] = (((((df[mean_col] * df[count_col] - df[target_value]) / (df[count_col] - 1)) - df[mean_col]) / df[std_col])).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
+        edge_0 = df[target_value]
+        edge_1 = (df[mean_col] * df[count_col] - df[target_value]) / (df[count_col] - 1)
+        
+        for i in range(intervals):
+            weight = i / (intervals - 1) if intervals > 1 else 0.0
+            val_i = edge_0 * (1 - weight) + edge_1 * weight
+            df[f"{col}_mu_{i}"] = ((val_i - df[mean_col]) / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
 
 
         # df[f"{col}_mu_0"] = (df[target_value]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
@@ -141,7 +141,7 @@ def perform_shrinkage_simple(
     columns_to_process = ["fdpp_partition_date", "con"] + [
         f"{col}_mu_{idx}" 
         for col in columns_to_aggregate 
-        for idx in range(3)
+        for idx in range(intervals)
     ]
     
     return df[columns_to_process].copy()
