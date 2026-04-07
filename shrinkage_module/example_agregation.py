@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from agregation import safe_div, equalish_intervals_1_to_n, perform_shrinkage
+from agregation import safe_div, equalish_intervals_1_to_n, perform_shrinkage_simple
 
 def example_safe_div() -> None:
     """
@@ -63,7 +63,7 @@ def example_perform_shrinkage() -> None:
     columns_to_aggregate = ["category_A", "category_B"]
     
     # Perform shrinkage
-    result_df = perform_shrinkage(
+    result_df = perform_shrinkage_simple(
         data=data, 
         columns_to_aggregate=columns_to_aggregate,
         agg_type_list=["mean", "count", "std"],
@@ -72,7 +72,7 @@ def example_perform_shrinkage() -> None:
     )
     
     print("\nResulting Shrinkage Dataframe (showing subset of columns to avoid clutter):")
-    cols_to_show = ["fdpp_partition_date", "con", "category_A_mu_0", "category_A_mu_1", "category_A_mu_6"]
+    cols_to_show = ["fdpp_partition_date", "con", "category_A_mu_0", "category_A_mu_1", "category_A_mu_2"]
     print(result_df[cols_to_show])
 
 if __name__ == "__main__":
