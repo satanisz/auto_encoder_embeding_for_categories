@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from agregation import safe_div, equalish_intervals_1_to_n
+from agregation import safe_div, equalish_intervals_1_to_n, perform_shrinkage
 
 def example_safe_div() -> None:
     """
@@ -41,7 +41,42 @@ def example_equalish_intervals_1_to_n() -> None:
     print(intervals_df)
 
 
+def example_perform_shrinkage() -> None:
+    """
+    Example demonstrating target encoding with shrinkage.
+    Groups by categorical columns and partition date to calculate smoothed target measurements.
+    """
+    print("\n--- perform_shrinkage Example ---")
+    
+    # Create sample DataFrame
+    data = pd.DataFrame({
+        "fdpp_partition_date": ["2026-01-01"] * 10,
+        "con": range(10, 20),
+        "category_A": ["cat1", "cat1", "cat1", "cat2", "cat2", "cat2", "cat2", "cat3", "cat3", "cat3"],
+        "category_B": ["typeX", "typeY", "typeX", "typeY", "typeX", "typeX", "typeY", "typeY", "typeX", "typeX"],
+        "balance_in_functional_currency": [100.0, 150.0, 120.0, 50.0, 60.0, 55.0, 45.0, 200.0, 210.0, 190.0]
+    })
+    
+    print("Original Data:")
+    print(data)
+    
+    columns_to_aggregate = ["category_A", "category_B"]
+    
+    # Perform shrinkage
+    result_df = perform_shrinkage(
+        data=data, 
+        columns_to_aggregate=columns_to_aggregate,
+        agg_type_list=["mean", "count", "std"],
+        target_value="balance_in_functional_currency",
+        intervals=5
+    )
+    
+    print("\nResulting Shrinkage Dataframe (showing subset of columns to avoid clutter):")
+    cols_to_show = ["fdpp_partition_date", "con", "category_A_mu_0", "category_A_mu_1", "category_A_mu_6"]
+    print(result_df[cols_to_show])
+
 if __name__ == "__main__":
     example_safe_div()
     example_equalish_intervals_1_to_n()
+    example_perform_shrinkage()
 

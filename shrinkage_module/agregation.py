@@ -29,11 +29,9 @@ def equalish_intervals_1_to_n(populations: pd.Series, intervals: int = 5, col_pr
     cols = [f"{col_prefix}{j}" for j in range(1, k + 1)]
     return pd.DataFrame(edges, index=populations.index, columns=cols)
 
-def create_surrounding_agg(data: pd.DataFrame, group_cols: list[str], target_value: str) -> pd.DataFrame:
-    """Computes the sum of a target value grouped by specified columns and merges it back to the original DataFrame."""
-    agg = data.groupby(group_cols, as_index=False).agg(
-        nominal_account_number_sum=(target_value, "sum")
-    )
+def create_surrounding_agg(data: pd.DataFrame, group_cols: list[str], aggregations: dict[str, tuple[str, str]]) -> pd.DataFrame:
+    """Computes specified aggregations grouped by specified columns and merges them back to the original DataFrame."""
+    agg = data.groupby(group_cols, as_index=False).agg(**aggregations)
     return data.merge(agg, on=group_cols, how="left")
 
 def perform_aggregation(data: pd.DataFrame) -> pd.DataFrame:
@@ -42,13 +40,16 @@ def perform_aggregation(data: pd.DataFrame) -> pd.DataFrame:
     group_cols = ["nominal_account_number", "fdpp_partition_date"]
     data = data.astype({target_value: "float64"})
 
-    return create_surrounding_agg(data, group_cols, target_value)
+    aggregations = {"nominal_account_number_sum": (target_value, "sum")}
+    return create_surrounding_agg(data, group_cols, aggregations)
 
 
 def perform_shrinkage(
     data: pd.DataFrame, 
     columns_to_aggregate: list[str], 
-    target_value: str = "balance_in_functional_currency"
+    agg_type_list: list[str] = ["mean", "count", "std"],
+    target_value: str = "balance_in_functional_currency",
+    intervals: int = 5
 ) -> pd.DataFrame:
     """Calculates smoothed (shrunk) target measurements per designated columns using a population-weighted average."""
     
@@ -57,13 +58,8 @@ def perform_shrinkage(
     # 1. Create Surrounding
     for col in columns_to_aggregate:
         group_cols = [col, "fdpp_partition_date"]
-        # Leveraging named aggregations with dictionary unpacking
-        agg = df.groupby(group_cols, as_index=False).agg(**{
-            f"{col}_mean": (target_value, "mean"),
-            f"{col}_count": (target_value, "count"),
-            f"{col}_std": (target_value, "std")
-        })
-        df = df.merge(agg, on=group_cols, how="left")
+        aggregations = {f"{col}_{k}": (target_value, k) for k in agg_type_list}
+        df = create_surrounding_agg(df, group_cols, aggregations)
 
     # 2. Process Shrinkage
     for col in columns_to_aggregate:
@@ -71,7 +67,7 @@ def perform_shrinkage(
         
         df[f"{col}_mu_0"] = (df[target_value] / df[std_col]).replace([np.inf, -np.inf], 0.0).fillna(0.0).abs()
         
-        df_m = equalish_intervals_1_to_n(df[count_col], intervals=5, col_prefix=f"{col}_m")
+        df_m = equalish_intervals_1_to_n(df[count_col], intervals=intervals, col_prefix=f"{col}_m")
         
         m = df_m
         count = df[count_col]
