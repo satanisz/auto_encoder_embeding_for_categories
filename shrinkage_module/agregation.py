@@ -1,23 +1,16 @@
 import pandas as pd
 import numpy as np
 
-def create_surrounding_agg(data: pd.DataFrame, target_value: str) -> pd.DataFrame:
-    group_cols = ["nominal_account_number", "fdpp_partition_date"]
-    
-    # Modern named aggregation handles renaming and resetting index in one step
-    agg = data.groupby(group_cols, as_index=False).agg(
-        nominal_account_number_sum=(target_value, "sum")
-    )
-    return data.merge(agg, on=group_cols, how="left")
 
-def perform_aggregation(data: pd.DataFrame, target_value: str = "balance in functional currency") -> pd.DataFrame:
-    df = data.astype({target_value: "float64"})
-    return create_surrounding_agg(df, target_value)
+def safe_div(n: pd.Series, d: pd.Series) -> pd.Series:
+    """Safely divides two Pandas Series, handling zeros, NaNs, and infinities."""
+    n_num = pd.to_numeric(n, errors="coerce")
+    d_num = pd.to_numeric(d, errors="coerce")
 
-# Execution
-# ftp_sdi_BS_combined = perform_aggregation(ftp_sdi_BS_combined)
+    out = n_num.div(d_num).replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
-
+    mask = (d_num == 0) | d_num.isna() | n_num.isna()
+    return out.mask(mask, 0.0)
 
 def equalish_intervals_1_to_n(populations: pd.Series, intervals: int = 5, col_prefix: str = "m") -> pd.DataFrame:
     """Calculates equalish intervals from 1 to n."""
@@ -36,11 +29,28 @@ def equalish_intervals_1_to_n(populations: pd.Series, intervals: int = 5, col_pr
     cols = [f"{col_prefix}{j}" for j in range(1, k + 1)]
     return pd.DataFrame(edges, index=populations.index, columns=cols)
 
+def create_surrounding_agg(data: pd.DataFrame, group_cols: list[str], target_value: str) -> pd.DataFrame:
+    """Computes the sum of a target value grouped by specified columns and merges it back to the original DataFrame."""
+    agg = data.groupby(group_cols, as_index=False).agg(
+        nominal_account_number_sum=(target_value, "sum")
+    )
+    return data.merge(agg, on=group_cols, how="left")
+
+def perform_aggregation(data: pd.DataFrame) -> pd.DataFrame:
+    """Applies predefined sum aggregations over the dataset, casting the target metric to float."""
+    target_value = "balance in functional currency"    
+    group_cols = ["nominal_account_number", "fdpp_partition_date"]
+    data = data.astype({target_value: "float64"})
+
+    return create_surrounding_agg(data, group_cols, target_value)
+
+
 def perform_shrinkage(
     data: pd.DataFrame, 
     columns_to_aggregate: list[str], 
     target_value: str = "balance_in_functional_currency"
 ) -> pd.DataFrame:
+    """Calculates smoothed (shrunk) target measurements per designated columns using a population-weighted average."""
     
     df = data.astype({target_value: "float64"}).copy()
 
